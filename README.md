@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/sudspy-logo.png" alt="sudspy logo" width="420"/>
+  <img src="assets/logo.png" alt="sudspy logo" width="420"/>
 </p>
 
 `sudspy` is a lightweight Python package for reading and converting **PC‑SUDS / SRC SUDS** seismic data files into modern **ObsPy** objects (Streams, Picks, and Inventory metadata).  
