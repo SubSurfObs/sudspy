@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sudspy"
+version = "0.1.0"
+description = "A Python reader and ObsPy bridge for legacy PC-SUDS seismic data"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Dan Sandiford", email = "dan.sandiford@unimelb.edu.au" }
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy",
+    "obspy",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.urls]
+Homepage = "https://github.com/SubSurfObs/sudspy"
+Repository = "https://github.com/SubSurfObs/sudspy"
+Issues = "https://github.com/SubSurfObs/sudspy/issues"
+
+[tool.setuptools]
+packages = ["sudspy"]

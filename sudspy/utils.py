@@ -13,55 +13,18 @@ from .collections import collect_comments
 
 def print_suds_block_structure(path, max_blocks=None):
     """
-    Diagnostic utility: print the linear block structure of a SUDS file,
-    grouped by DESCRIPTRACE context.
-
-    This function DOES NOT infer relationships – it only shows ordering.
+    Print a simple linear listing of SUDS blocks:
+    struct_type, struct name, and byte offset.
     """
 
-    current_trace = None
+    print(f"\nSUDS block listing for: {path}\n")
+
     count = 0
-
-    print(f"\nSUDS structure walk for: {path}\n")
-
     for block in iter_suds_blocks(path):
         stype = block.struct_type
-        name = SUDS_STRUCT_TYPES.get(stype, f"UNKNOWN({stype})")
+        name = SUDS_STRUCT_TYPES.get(stype, "UNKNOWN")
 
-        # ---- DESCRIPTRACE defines a new waveform context ----
-        if stype == 7:
-            desc = parse_descriptrace_struct(block)
-            lid = desc.get("longident") or desc.get("statident")
-
-            current_trace = lid
-            print("\n" + "-" * 72)
-            print(f"DESCRIPTRACE @ offset {block.offset}")
-            print(f"  waveform: {lid['network']}.{lid['station']}..{lid['component']}")
-            print("-" * 72)
-
-        else:
-            indent = "  "
-            print(
-                f"{indent}{name:<12} @ offset {block.offset}"
-                + (f"   [context={current_trace['component']}]" if current_trace else "")
-            )
-
-            # Optional: show key details for some structs
-            if stype == 10:  # FEATURE
-                feat = parse_feature_struct(block)
-                sb = feat["struct_body"]
-                phase = SRC_PHASE_MAP.get(sb["obs_phase"], sb["obs_phase"])
-                print(
-                    f"{indent*2}phase={phase}  "
-                    f"onset={sb['onset']}  "
-                    f"time={sb['time']}"
-                )
-
-            elif stype == 20:  # COMMENT
-                com = parse_comment_struct(block)
-                print(
-                    f"{indent*2}length={com['struct_body']['length']}"
-                )
+        print(f"{stype:3d}  {name:<14}  offset={block.offset}")
 
         count += 1
         if max_blocks and count >= max_blocks:

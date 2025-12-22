@@ -1,0 +1,15 @@
+LICENSE
+README.md
+pyproject.toml
+sudspy/__init__.py
+sudspy/blocks.py
+sudspy/collections.py
+sudspy/constants.py
+sudspy/obspy.py
+sudspy/parsers.py
+sudspy/utils.py
+sudspy.egg-info/PKG-INFO
+sudspy.egg-info/SOURCES.txt
+sudspy.egg-info/dependency_links.txt
+sudspy.egg-info/requires.txt
+sudspy.egg-info/top_level.txt
