@@ -2,8 +2,8 @@
   <img src="assets/logo.png" alt="sudspy logo" width="520"/>
 </p>
 
-`sudspy` is a lightweight Python package for reading and converting **PC‑SUDS / SRC SUDS** seismic data files into modern **ObsPy** objects (Streams, Picks, and Inventory metadata).  
-It is designed for robustness, transparency, and batch‑style archive conversion rather than “black box” magic.
+`sudspy` is a lightweight Python package for reading and converting **PC‑SUDS / SRC SUDS** seismic data files into **ObsPy** objects (Streams, Picks, and Inventory metadata).  
+
 
 ---
 
@@ -28,9 +28,8 @@ Because SUDS is a linear tagged format:
 
 - Each block is self‑contained.
 - Block sizes are explicit.
-- Readers scan sequentially until EOF.
 
-As a result, concatenating minute‑long files into day‑long files works without rewriting metadata.
+As a result, concatenating files works without rewriting metadata.
 
 ---
 
