@@ -6,6 +6,7 @@
 
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Iterator, Iterable, List, Tuple, Union
+import gzip
 import struct
 from .constants import SRC_PHASE_MAP, SUDS_STRUCT_TYPES
 
@@ -51,12 +52,29 @@ def print_suds_struct_summary(path):
 
 
 
-def iter_suds_blocks(path: str) -> Iterable[SudsBlock]:
+def iter_suds_blocks(
+    path: str,
+    *,
+    skip_data: bool = False,
+    strict: bool = True,
+) -> Iterable[SudsBlock]:
     """
     Layer 1 (IMMUTABLE): Yield raw SUDS blocks: tag + struct_body + data.
     No interpretation, no parsing.
+
+    Parameters
+    ----------
+    path : str
+        Path to SUDS file. Gzip-compressed files (.gz) are handled transparently.
+    skip_data : bool
+        If True, read and discard data payloads rather than returning them.
+        block.data will be b"" for all blocks. Use for fast metadata-only scans.
+    strict : bool
+        If True (default), raise on bad sync bytes or truncated reads.
+        If False, stop iteration cleanly on first error (useful for partial files).
     """
-    with open(path, "rb") as f:
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rb") as f:
         offset = 0
         while True:
             tag_raw = f.read(12)
@@ -65,15 +83,28 @@ def iter_suds_blocks(path: str) -> Iterable[SudsBlock]:
 
             tag = parse_structtag(tag_raw)
             if tag["sync"] != b"S" or tag["machine"] != b"6":
-                raise RuntimeError(f"Bad SUDS sync/machine at offset {offset}: {tag}")
+                if strict:
+                    raise RuntimeError(f"Bad SUDS sync/machine at offset {offset}: {tag}")
+                break
 
             struct_body = f.read(tag["struct_length"])
             if len(struct_body) != tag["struct_length"]:
-                raise EOFError("Unexpected EOF reading struct_body")
+                if strict:
+                    raise EOFError("Unexpected EOF reading struct_body")
+                break
 
-            data = f.read(tag["data_length"]) if tag["data_length"] > 0 else b""
-            if len(data) != tag["data_length"]:
-                raise EOFError("Unexpected EOF reading data")
+            if tag["data_length"] > 0:
+                if skip_data:
+                    f.read(tag["data_length"])  # read and discard (gzip-compatible)
+                    data = b""
+                else:
+                    data = f.read(tag["data_length"])
+                    if len(data) != tag["data_length"]:
+                        if strict:
+                            raise EOFError("Unexpected EOF reading data")
+                        break
+            else:
+                data = b""
 
             yield SudsBlock(
                 struct_type=tag["struct_type"],

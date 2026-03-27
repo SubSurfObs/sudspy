@@ -32,3 +32,9 @@ Issues = "https://github.com/SubSurfObs/sudspy/issues"
 
 [tool.setuptools]
 packages = ["sudspy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Run tests with the obs-nb-fdsn-access conda env (base env has broken numpy):
+#   conda run -n obs-nb-fdsn-access python -m pytest tests/ -v
