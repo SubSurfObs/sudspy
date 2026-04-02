@@ -12,7 +12,7 @@ from collections import defaultdict
 from obspy import UTCDateTime, Stream, Trace
 from obspy.core.event import Pick, WaveformStreamID
 from obspy.core.event.header import PickOnset, PickPolarity
-from obspy.core.inventory import Inventory, Network, Station, Channel, Site
+from obspy.core.inventory import Inventory, Network, Station, Channel, Site, Equipment
 from obspy.core.inventory.response import Response, InstrumentSensitivity, ResponseStage
 
 from .blocks import SudsBlock, iter_suds_blocks
@@ -24,11 +24,21 @@ from .parsers import (
     _clean_code, _datatype_to_numpy
 )
 from .constants import SRC_PHASE_MAP
-from .collections import collect_stations, collect_instruments
+from .collections import collect_stations, collect_instruments, collect_comments
 
 
 
 LocationMap = Dict[str, str]  # keys like "NET.STA.CHA" -> "00"
+
+
+def _parse_comment_kv(text: str) -> dict:
+    """Parse 'Key=Value\\n' lines from a SUDS COMMENT text block into a dict."""
+    result = {}
+    for line in text.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            result[k.strip()] = v.strip()
+    return result
 
 
 def resolve_location(
@@ -220,6 +230,7 @@ def read_suds_inv(
 
     stations_by_chan = collect_stations(path)
     instruments_by_chan = collect_instruments(path)
+    comments_by_chan = collect_comments(path)
 
     # Group channels back into NET.STA
     grouped = defaultdict(list)
@@ -306,6 +317,23 @@ def read_suds_inv(
                     response_stages=stages,
                     instrument_sensitivity=sensitivity,
                 )
+
+            # ---- attach equipment info from COMMENT blocks ----
+            kv = {}
+            for c in comments_by_chan.get(chan_key, []):
+                kv.update(_parse_comment_kv(c["struct_body"]["text"]))
+
+            sensor_desc = kv.get("SensorA", "").strip()
+            sensor_serial = kv.get("SensorASerial", "").strip()
+            logger_desc = kv.get("DataLogger", "").strip()
+
+            if sensor_desc:
+                chan.sensor = Equipment(
+                    description=sensor_desc,
+                    serial_number=sensor_serial or None,
+                )
+            if logger_desc:
+                chan.data_logger = Equipment(description=logger_desc)
 
             sta.channels.append(chan)
 
