@@ -59,4 +59,12 @@ read_s = time.time() - t
 os.unlink(tmp.name)
 print(f"concat   : build {build_s:.1f}s + read {read_s:.1f}s, {n2} traces, {s2} samples, err={cat_err}")
 if cat_err is None and read_s > 0:
-    print(f"  concat read vs per-file (read only): {per_s/read_s:.1f}x")
+    if n2 == ntr and s2 == nsamp:
+        print(f"  concat read vs per-file (read only): {per_s/read_s:.1f}x")
+    else:
+        # strict=False (sudspy's default) stops at the first inter-file bad-sync,
+        # so a cat-of-day silently truncates on real EchoPro data — printing a
+        # speedup over a partial read would be misleading.
+        print(f"  WARNING: concat returned {n2}/{ntr} traces, {s2}/{nsamp} samples "
+              f"({100*s2/nsamp:.1f}% of per-file). Speedup suppressed: "
+              f"strict=False stops at the first inter-file bad-sync.")
