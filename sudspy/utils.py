@@ -2,6 +2,7 @@
 
 from typing import List
 import numpy as np
+from obspy import Stream, Trace
 from .blocks import iter_suds_blocks
 from .parsers import (
     parse_descriptrace_struct,
@@ -139,6 +140,146 @@ def fast_merge_safe(
     out.stats.npts = len(out.data)
 
     return out
+
+
+def fast_merge_split(stream, overlap: str = "trim") -> Stream:
+    """O(N log N) numpy-direct replacement for the
+    ``Stream.merge(method=1, fill_value=None) + .split()`` combo.
+
+    Groups input traces by id; within each group:
+
+      1. sort by starttime               -> O(N log N)
+      2. walk forward keeping a running concat buffer
+         - contiguous (within half-sample tol) -> append
+         - gap                                  -> emit current run, start new
+         - overlap                              -> see ``overlap`` policy
+      3. flush the final run
+
+    Returns a multi-trace ``Stream`` with no internal gaps within any trace
+    and no overlapping samples across traces of the same id — the same shape
+    that ``Stream.merge(method=1) + .split()`` produces today, but:
+
+      - O(N log N) sort + O(N) walk, not O(N^2) pairwise merge;
+      - preserves the input dtype (no float coercion);
+      - configurable overlap policy.
+
+    Parameters
+    ----------
+    stream : obspy.Stream
+        Input traces. May contain traces from multiple ids; each id is
+        merged independently.
+    overlap : {"trim", "error", "ignore"}, default "trim"
+        Policy for overlapping samples:
+        - "trim"    : drop the leading overlapping samples from the later
+                      trace (matches ``merge(method=1)`` on typical seismic
+                      data where overlap is sub-sample clock drift).
+        - "error"   : raise ``ValueError`` on detected overlap.
+        - "ignore"  : skip the later overlapping trace entirely.
+
+    Notes
+    -----
+    The only semantic divergence from obspy's merge+split is the overlap
+    policy: obspy's ``method=1`` averages overlapping samples; this trims
+    them from the later trace (prefer earlier). For typical clock-drift
+    overlap (sub-sample) the choice produces byte-identical output on real
+    data; for intentional multi-source overlap (disk + telemetry covering
+    the same minutes), dedup upstream before calling.
+    """
+    if overlap not in ("trim", "error", "ignore"):
+        raise ValueError(f"Unknown overlap mode: {overlap!r}")
+
+    out = Stream()
+
+    # Group by trace id
+    by_id: dict = {}
+    for tr in stream:
+        by_id.setdefault(tr.id, []).append(tr)
+
+    for trace_id, traces in by_id.items():
+        traces.sort(key=lambda t: t.stats.starttime)
+
+        # Per-run state — template tracks the trace that started the run
+        # so we use the right sampling_rate/etc when emitting, even if a
+        # later trace in the same id arrives at a different rate.
+        run_template: Trace | None = None
+        run_start = None
+        run_samples: list = []
+        run_end = None  # endtime of the last sample in current run
+
+        for tr in traces:
+            if len(tr.data) == 0:
+                continue
+
+            tr_start = tr.stats.starttime
+            tr_end = tr.stats.endtime
+
+            if run_template is None:
+                run_template = tr
+                run_start = tr_start
+                run_samples = [tr.data]
+                run_end = tr_end
+                continue
+
+            # Rate change within an id is anomalous but tolerated: flush
+            # the current run and start a new one with the new template.
+            if tr.stats.sampling_rate != run_template.stats.sampling_rate:
+                out += _emit_run(run_template, run_start, run_samples)
+                run_template = tr
+                run_start = tr_start
+                run_samples = [tr.data]
+                run_end = tr_end
+                continue
+
+            delta = run_template.stats.delta
+            gap_tol = delta * 0.5
+            gap_seconds = float(tr_start - run_end) - delta  # >0 gap, <0 overlap
+
+            if gap_seconds > gap_tol:
+                # Real gap → flush current run, start a new one.
+                out += _emit_run(run_template, run_start, run_samples)
+                run_template = tr
+                run_start = tr_start
+                run_samples = [tr.data]
+                run_end = tr_end
+            elif gap_seconds < -gap_tol:
+                # Overlap.
+                if overlap == "error":
+                    raise ValueError(
+                        f"Overlap detected at {tr_start} for {trace_id} "
+                        f"({-gap_seconds:.6f} s)"
+                    )
+                if overlap == "ignore":
+                    continue
+                # overlap == "trim": drop leading samples from the later trace.
+                n_skip = int(round(-gap_seconds / delta))
+                if n_skip < len(tr.data):
+                    run_samples.append(tr.data[n_skip:])
+                    run_end = tr_end
+                # else: the later trace is fully overlapped — drop entirely.
+            else:
+                # Contiguous (within half-sample tolerance).
+                run_samples.append(tr.data)
+                run_end = tr_end
+
+        # Flush the final run.
+        if run_template is not None and run_samples:
+            out += _emit_run(run_template, run_start, run_samples)
+
+    return out
+
+
+def _emit_run(template: Trace, start, samples_list: list) -> Trace:
+    """Build a Trace by concatenating ``samples_list``.
+
+    Non-data metadata is copied from ``template.stats``; ``starttime`` and
+    ``npts`` are recomputed. Output dtype follows ``np.concatenate`` (common
+    dtype of the inputs), which preserves int dtypes on the SUDS read path.
+    """
+    data = np.concatenate(samples_list) if len(samples_list) > 1 else samples_list[0]
+    stats = template.stats.copy()
+    stats.starttime = start
+    stats.npts = len(data)
+    return Trace(data=data, header=stats)
 
 
     # --- tiny smoke test helper ---

@@ -13,6 +13,7 @@ from .collections import (
 
 from .utils import (
     fast_merge_safe,
+    fast_merge_split,
     print_suds_block_structure,
 )
 
@@ -28,6 +29,7 @@ __all__ = [
     "collect_instruments",
     "collect_comments",
     "fast_merge_safe",
+    "fast_merge_split",
     "parse_echopro_filename",
     "scan_suds_file",
 ]

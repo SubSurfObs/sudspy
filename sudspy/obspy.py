@@ -126,7 +126,13 @@ def suds_blocks_to_stream(
             t0 = float(sb["begintime"])
             starttime = UTCDateTime(t0)
 
-            data = np.frombuffer(payload[:npts * bps], dtype=np_dt).astype(np.float32, copy=False)
+            # Preserve native int dtype from the SUDS payload. Digitizer counts
+            # are integers (int16 / int32 per _datatype_to_numpy); upcasting to
+            # float32 was lossy beyond ~16.7M counts (float32's 24-bit mantissa),
+            # forced downstream callers to cast back before STEIM2, and made the
+            # merge step introduce sub-count drift at overlap boundaries. .copy()
+            # because np.frombuffer returns a read-only view; ObsPy needs writable.
+            data = np.frombuffer(payload[:npts * bps], dtype=np_dt).copy()
 
             tr = Trace(
                 data=data,
