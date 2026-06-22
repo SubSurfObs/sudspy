@@ -5,3 +5,6 @@ dist/
 build/
 .DS_Store
 .pytest_cache/
+
+# large local-only speed-test fixtures (whole-day OUTU copy, ~130 MB) — recreate via tests/outu/README.md
+tests/outu/day_*/

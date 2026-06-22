@@ -183,6 +183,11 @@ def parse_instrument_struct(block: SudsBlock) -> Dict[str, Any]:
         v = struct.unpack_from("<h", raw, off)[0]; off += 2
         return v
 
+    def uh():
+        nonlocal off
+        v = struct.unpack_from("<H", raw, off)[0]; off += 2
+        return v
+
     def lg():
         nonlocal off
         v = struct.unpack_from("<i", raw, off)[0]; off += 4
@@ -203,8 +208,16 @@ def parse_instrument_struct(block: SudsBlock) -> Dict[str, Any]:
         v = raw[off:off+n].decode("ascii", errors="ignore").strip("\x00 "); off += n
         return v
 
+    # NOTE on `instrument_id` / `sensor_id`: these fields are labeled "serial"
+    # in the PC-SUDS spec, but EchoPro recorders populate them with an INTERNAL
+    # ID, not the recorder's real manufacturer serial — verified empirically:
+    # WPSH's true serial 75006528 does not appear anywhere in the file. Treat
+    # them as opaque identifiers, NOT as `Equipment.serial_number` (map to
+    # `data_logger.internal_id`-style fields if surfaced in the Inventory).
+    # Read as unsigned: EchoPro values overflow the signed `<h` range (e.g.
+    # OUTU: 40471, WPSH: 38155 — both came back as negatives under `<h`).
     sb = {
-        "in_serial": sh(),
+        "instrument_id": uh(),
         "comps": sh(),
         "channel": sh(),
         "sens_type": ch(),
@@ -224,7 +237,7 @@ def parse_instrument_struct(block: SudsBlock) -> Dict[str, Any]:
         "pre_event": fl(),
         "trig_num": sh(),
         "study": strn(6),
-        "sn_serial": sh(),
+        "sensor_id": uh(),
     }
 
     return {
