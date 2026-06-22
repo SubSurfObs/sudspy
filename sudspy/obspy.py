@@ -153,6 +153,8 @@ def suds_blocks_to_stream(
 def read_suds_stream(
     path: str,
     *,
+    strict: bool = False,
+    diag: Optional[dict] = None,
     default_location: str = "",
     location_map: Optional[LocationMap] = None,
     expected_network_len: Optional[int] = 2,
@@ -160,9 +162,23 @@ def read_suds_stream(
 ) -> Stream:
     """
     ObsPy-style reader for PC-SUDS waveform files.
+
+    strict : bool, default False
+        Tolerant by default: recover all cleanly-parsed waveform channels and
+        stop at the first unparseable region rather than aborting the whole
+        file. Many real EchoPro .dmx files carry valid 3-channel waveform data
+        followed by a short trailing appendix (CHANSET/DETECTOR/EVENTSETTING +
+        leftover bytes) that the strict parser rejects — strict=False keeps the
+        waveforms and discards only the trailing junk. Pass strict=True to
+        restore the old fail-hard behaviour.
+    diag : dict, optional
+        If provided, populated with parse-stop diagnostics (n_blocks,
+        last_good_offset, stop_reason). Lets the caller distinguish
+        "clean_eof" (fully read) from "bad_sync"/"short_data" (stopped early —
+        trailing junk or genuine truncation). See iter_suds_blocks.
     """
     return suds_blocks_to_stream(
-        iter_suds_blocks(path),
+        iter_suds_blocks(path, strict=strict, diag=diag),
         default_location=default_location,
         location_map=location_map,
         expected_network_len=expected_network_len,

@@ -6,7 +6,10 @@
 
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Iterator, Iterable, List, Tuple, Union
-import gzip
+try:
+    from isal import igzip as gzip   # 2-3x faster than stdlib zlib on AVX2 CPUs
+except ImportError:                  # graceful fallback if isal isn't installed
+    import gzip
 import struct
 from .constants import SRC_PHASE_MAP, SUDS_STRUCT_TYPES
 
@@ -57,6 +60,7 @@ def iter_suds_blocks(
     *,
     skip_data: bool = False,
     strict: bool = True,
+    diag: dict = None,
 ) -> Iterable[SudsBlock]:
     """
     Layer 1 (IMMUTABLE): Yield raw SUDS blocks: tag + struct_body + data.
@@ -71,26 +75,46 @@ def iter_suds_blocks(
         block.data will be b"" for all blocks. Use for fast metadata-only scans.
     strict : bool
         If True (default), raise on bad sync bytes or truncated reads.
-        If False, stop iteration cleanly on first error (useful for partial files).
+        If False, stop iteration cleanly on first error (useful for partial files
+        and for recovering files with valid data followed by trailing junk).
+    diag : dict, optional
+        If provided, populated with stop diagnostics so the caller can tell
+        "clean EOF" from "stopped early at trailing junk / truncation":
+          n_blocks        : number of blocks yielded
+          last_good_offset : byte offset after the last good block
+          stop_reason     : 'clean_eof' | 'bad_sync' | 'short_tag'
+                            | 'short_struct' | 'short_data'
+        Only meaningful when strict=False (strict=True raises instead).
     """
+    if diag is not None:
+        diag["n_blocks"] = 0
+        diag["last_good_offset"] = 0
+        diag["stop_reason"] = "clean_eof"
+
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rb") as f:
         offset = 0
         while True:
             tag_raw = f.read(12)
             if len(tag_raw) < 12:
+                if diag is not None and len(tag_raw) != 0:
+                    diag["stop_reason"] = "short_tag"
                 break
 
             tag = parse_structtag(tag_raw)
             if tag["sync"] != b"S" or tag["machine"] != b"6":
                 if strict:
                     raise RuntimeError(f"Bad SUDS sync/machine at offset {offset}: {tag}")
+                if diag is not None:
+                    diag["stop_reason"] = "bad_sync"
                 break
 
             struct_body = f.read(tag["struct_length"])
             if len(struct_body) != tag["struct_length"]:
                 if strict:
                     raise EOFError("Unexpected EOF reading struct_body")
+                if diag is not None:
+                    diag["stop_reason"] = "short_struct"
                 break
 
             if tag["data_length"] > 0:
@@ -102,6 +126,8 @@ def iter_suds_blocks(
                     if len(data) != tag["data_length"]:
                         if strict:
                             raise EOFError("Unexpected EOF reading data")
+                        if diag is not None:
+                            diag["stop_reason"] = "short_data"
                         break
             else:
                 data = b""
@@ -115,3 +141,6 @@ def iter_suds_blocks(
             )
 
             offset += 12 + tag["struct_length"] + tag["data_length"]
+            if diag is not None:
+                diag["n_blocks"] += 1
+                diag["last_good_offset"] = offset
