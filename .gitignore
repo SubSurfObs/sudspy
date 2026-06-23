@@ -8,3 +8,9 @@ build/
 
 # large local-only speed-test fixtures (whole-day OUTU copy, ~130 MB) — recreate via tests/outu/README.md
 tests/outu/day_*/
+
+# Per-session Claude config (operator-local, not a project artefact)
+.claude/
+
+# Venv (some hosts install editable into project dir)
+.venv/
