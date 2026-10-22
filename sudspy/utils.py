@@ -201,23 +201,33 @@ def fast_merge_split(stream, overlap: str = "trim") -> Stream:
         # Per-run state — template tracks the trace that started the run
         # so we use the right sampling_rate/etc when emitting, even if a
         # later trace in the same id arrives at a different rate.
+        #
+        # TIMESTAMP FIDELITY (2026-10-22): contiguity is judged against the
+        # EMITTED grid (run_start + n_appended*delta), not against the
+        # previous trace's stated endtime. Judging step-by-step lets tiny
+        # per-file clock jitter accumulate without bound: a recorder whose
+        # clock drifts ~10 ms/hour (observed: DU.LKHRT 2023-07-28) welds
+        # into one trace whose sample times diverge arbitrarily from the
+        # files' own stated times. Against-the-grid, every emitted sample
+        # stays within half a sample of its recorder-stated time, and a
+        # drifting station simply yields more trace segments — "convert
+        # the data as it is timestamped" (operator ruling 2026-10-22).
         run_template: Trace | None = None
         run_start = None
         run_samples: list = []
-        run_end = None  # endtime of the last sample in current run
+        run_nsamples = 0  # samples appended so far (drives the grid)
 
         for tr in traces:
             if len(tr.data) == 0:
                 continue
 
             tr_start = tr.stats.starttime
-            tr_end = tr.stats.endtime
 
             if run_template is None:
                 run_template = tr
                 run_start = tr_start
                 run_samples = [tr.data]
-                run_end = tr_end
+                run_nsamples = len(tr.data)
                 continue
 
             # Rate change within an id is anomalous but tolerated: flush
@@ -227,22 +237,25 @@ def fast_merge_split(stream, overlap: str = "trim") -> Stream:
                 run_template = tr
                 run_start = tr_start
                 run_samples = [tr.data]
-                run_end = tr_end
+                run_nsamples = len(tr.data)
                 continue
 
             delta = run_template.stats.delta
             gap_tol = delta * 0.5
-            gap_seconds = float(tr_start - run_end) - delta  # >0 gap, <0 overlap
+            # Where the NEXT sample slot of the emitted grid sits:
+            expected_next = run_start + run_nsamples * delta
+            gap_seconds = float(tr_start - expected_next)  # >0 gap, <0 overlap
 
             if gap_seconds > gap_tol:
-                # Real gap → flush current run, start a new one.
+                # Real gap (or accumulated clock drift) → flush current run,
+                # start a new one anchored at the file's stated time.
                 out += _emit_run(run_template, run_start, run_samples)
                 run_template = tr
                 run_start = tr_start
                 run_samples = [tr.data]
-                run_end = tr_end
+                run_nsamples = len(tr.data)
             elif gap_seconds < -gap_tol:
-                # Overlap.
+                # Overlap (or negative drift).
                 if overlap == "error":
                     raise ValueError(
                         f"Overlap detected at {tr_start} for {trace_id} "
@@ -250,16 +263,17 @@ def fast_merge_split(stream, overlap: str = "trim") -> Stream:
                     )
                 if overlap == "ignore":
                     continue
-                # overlap == "trim": drop leading samples from the later trace.
+                # overlap == "trim": drop leading samples from the later
+                # trace, positions judged on the emitted grid.
                 n_skip = int(round(-gap_seconds / delta))
                 if n_skip < len(tr.data):
                     run_samples.append(tr.data[n_skip:])
-                    run_end = tr_end
+                    run_nsamples += len(tr.data) - n_skip
                 # else: the later trace is fully overlapped — drop entirely.
             else:
-                # Contiguous (within half-sample tolerance).
+                # Contiguous with the emitted grid (within half a sample).
                 run_samples.append(tr.data)
-                run_end = tr_end
+                run_nsamples += len(tr.data)
 
         # Flush the final run.
         if run_template is not None and run_samples:
