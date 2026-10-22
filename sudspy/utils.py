@@ -142,6 +142,16 @@ def fast_merge_safe(
     return out
 
 
+# Boundary between "early clock drift" (split into a new segment, keep the
+# recorder-stated time) and "duplicate-source overlap" (trim per policy).
+# Drift accumulates slowly and is caught at each file boundary, so a
+# drift-caused early arrival is barely over the half-sample tolerance —
+# millisecond scale. Duplicate copies (boundary-tail re-reads, merge into an
+# existing day file) overlap by whole seconds to minutes. One second cleanly
+# separates the two regimes at every sample rate in the archive (50–1000 Hz).
+DRIFT_SPLIT_MAX_S = 1.0
+
+
 def fast_merge_split(stream, overlap: str = "trim") -> Stream:
     """O(N log N) numpy-direct replacement for the
     ``Stream.merge(method=1, fill_value=None) + .split()`` combo.
@@ -255,7 +265,32 @@ def fast_merge_split(stream, overlap: str = "trim") -> Stream:
                 run_samples = [tr.data]
                 run_nsamples = len(tr.data)
             elif gap_seconds < -gap_tol:
-                # Overlap (or negative drift).
+                # Early arrival relative to the emitted grid. Two distinct
+                # causes, handled differently (review 2026-10-23, F6):
+                #
+                # (a) ACCUMULATED CLOCK DRIFT, early direction: deviation is
+                #     small (sub-second) and the trace carries NEW time —
+                #     it extends beyond the current run. Trimming here would
+                #     silently re-time or discard recorder-stated samples,
+                #     violating the as-timestamped ruling. Mirror the
+                #     positive-drift rule: flush the run and start a new
+                #     segment anchored at the file's stated time.
+                #
+                # (b) DUPLICATE-SOURCE OVERLAP: a second copy of the same
+                #     window (boundary-tail re-reads, write_sds merging new
+                #     data into an existing day file). Deviation is large
+                #     (seconds to minutes) and/or the trace adds nothing
+                #     beyond the run. Keep the established policy below.
+                tr_grid_end = tr_start + len(tr.data) * delta
+                run_grid_end = expected_next
+                extends_run = float(tr_grid_end - run_grid_end) > gap_tol
+                if extends_run and -gap_seconds < DRIFT_SPLIT_MAX_S:
+                    out += _emit_run(run_template, run_start, run_samples)
+                    run_template = tr
+                    run_start = tr_start
+                    run_samples = [tr.data]
+                    run_nsamples = len(tr.data)
+                    continue
                 if overlap == "error":
                     raise ValueError(
                         f"Overlap detected at {tr_start} for {trace_id} "

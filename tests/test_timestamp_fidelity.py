@@ -48,3 +48,48 @@ def test_clean_contiguous_unchanged():
     merged = fast_merge_split(traces)
     assert len(merged) == 1
     assert merged[0].stats.npts == 60 * 6000
+
+
+def test_early_drifting_clock_splits_and_keeps_stated_times():
+    """Negative direction of the drift rule (review 2026-10-23, F6): a clock
+    running EARLY must also split into new segments at the stated times —
+    never have its leading samples trimmed onto the previous grid."""
+    t0 = UTCDateTime(2023, 7, 28)
+    # Stated starts drift -0.3 ms per file; accumulates to -36 ms
+    # (-3.6 samples at 100 Hz) across 120 minute-files.
+    traces = [_minute(t0 + i * 60 - i * 0.0003, i) for i in range(120)]
+    merged = fast_merge_split(__import__("obspy").Stream(traces))
+    assert len(merged) > 1, "early drift must split segments, not trim"
+    total = sum(seg.stats.npts for seg in merged)
+    assert total == 120 * 6000, "early drift must not discard any samples"
+    for i, src in enumerate(traces):
+        s = float(src.stats.starttime.timestamp)
+        ok = False
+        for seg in merged:
+            g0 = float(seg.stats.starttime.timestamp)
+            dt = seg.stats.delta
+            idx = round((s - g0) / dt)
+            if 0 <= idx < seg.stats.npts:
+                err = abs(s - (g0 + idx * dt))
+                if err <= dt / 2 + 1e-9 and seg.data[idx] == i:
+                    ok = True
+                    break
+        assert ok, f"file {i}: stated time not honoured within half a sample"
+
+
+def test_duplicate_overlap_still_trims():
+    """Regression: genuine duplicate-source overlap (a second copy of the
+    same window, e.g. boundary-tail re-reads or write_sds merging into an
+    existing day file) keeps the established trim-prefer-earlier policy."""
+    obspy = __import__("obspy")
+    t0 = UTCDateTime(2023, 7, 28)
+    a = _minute(t0, 1)                 # 60 s
+    b = _minute(t0 + 30, 2)            # duplicate copy of the last 30 s + 30 s new
+    merged = fast_merge_split(obspy.Stream([a, b]))
+    assert len(merged) == 1, "whole-seconds duplicate overlap must merge"
+    assert merged[0].stats.npts == 9000  # 90 s at 100 Hz, overlap trimmed
+    assert merged[0].data[0] == 1 and merged[0].data[-1] == 2
+    # Fully-contained duplicate is dropped entirely.
+    c = _minute(t0 + 10, 3, n=1000)    # 10 s inside `a`
+    merged2 = fast_merge_split(obspy.Stream([a, c]))
+    assert len(merged2) == 1 and merged2[0].stats.npts == 6000
