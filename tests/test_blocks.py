@@ -98,3 +98,51 @@ def test_multi_station_block_count(multi_station_file):
     types = [b.struct_type for b in iter_suds_blocks(str(multi_station_file))]
     assert types.count(5) >= 2   # at least 2 STATIONCOMP (one per station per channel)
     assert types.count(7) >= 2   # at least 2 DESCRIPTRACE
+
+
+def _gz_bytes(src):
+    import gzip as _g
+    return _g.compress(open(src, "rb").read())
+
+
+def test_gzip_trailing_filler_is_lossless(single_chan_file, tmp_path):
+    """A complete, CRC-verified member followed by filler bytes (EqServer
+    MRAT: deadbeefcafecafe) yields exactly the original blocks and records
+    the filler (eqserver 2026-10-31)."""
+    p = tmp_path / "filler.sud.gz"
+    p.write_bytes(_gz_bytes(single_chan_file) + bytes.fromhex("deadbeefcafecafe"))
+    orig = list(iter_suds_blocks(str(single_chan_file)))
+    for strict in (True, False):
+        diag = {}
+        got = list(iter_suds_blocks(str(p), strict=strict, diag=diag))
+        assert [b.data for b in got] == [b.data for b in orig]
+        assert [b.struct_body for b in got] == [b.struct_body for b in orig]
+        assert diag["gzip_trailing_bytes"] == "deadbeefcafecafe"
+        assert diag["stop_reason"] == "clean_eof"
+
+
+def test_gzip_truncated_member_keeps_only_complete_blocks(single_chan_file, tmp_path):
+    """A member that genuinely ends early: strict raises; tolerant keeps
+    only complete blocks (never a partial one) and flags the truncation."""
+    gz = _gz_bytes(single_chan_file)
+    p = tmp_path / "cut.sud.gz"
+    p.write_bytes(gz[: len(gz) * 2 // 3])
+    with pytest.raises(EOFError):
+        list(iter_suds_blocks(str(p), strict=True))
+    orig = list(iter_suds_blocks(str(single_chan_file)))
+    diag = {}
+    got = list(iter_suds_blocks(str(p), strict=False, diag=diag))
+    assert diag.get("gzip_truncated") is True
+    assert 0 < len(got) < len(orig)
+    for g, o in zip(got, orig):
+        assert g.data == o.data and g.struct_body == o.struct_body
+
+
+def test_gzip_corrupt_data_raises(single_chan_file, tmp_path):
+    gz = bytearray(_gz_bytes(single_chan_file))
+    for i in range(20, 60):
+        gz[i] ^= 0xFF
+    p = tmp_path / "corrupt.sud.gz"
+    p.write_bytes(bytes(gz))
+    with pytest.raises(Exception):
+        list(iter_suds_blocks(str(p), strict=False))

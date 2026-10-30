@@ -4,6 +4,7 @@
 
 
 
+import io
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Iterator, Iterable, List, Tuple, Union
 try:
@@ -12,6 +13,40 @@ except ImportError:                  # graceful fallback if isal isn't installed
     import gzip
 import struct
 from .constants import SRC_PHASE_MAP, SUDS_STRUCT_TYPES
+
+# Trailing bytes after a complete gzip member (eqserver 2026-10-31: MRAT
+# 2017-2021 .dmx.gz files end with the 8-byte filler deadbeefcafecafe after
+# a CRC-verified member; the stdlib/isal readers then fail looking for a
+# second member and the whole file was dropped).
+def _gunzip_bytes(path, strict=True, diag=None) -> bytes:
+    """Decompress a .gz SUDS file. Fast path: whole-file (isal) decompress.
+    If that fails, decode the FIRST member with zlib, which verifies the
+    gzip CRC32 and length itself. A complete, verified member followed by
+    trailing bytes is lossless: keep it and record the bytes
+    (diag['gzip_trailing_bytes']). A member that genuinely ends early is
+    an error under strict=True; under strict=False only the decoded prefix
+    is kept (the block walker then stops at the last COMPLETE block, so no
+    partial block is ever emitted) and diag['gzip_truncated'] is set.
+    Corrupt deflate data (zlib.error) always raises."""
+    import zlib
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        return gzip.decompress(raw)
+    except (EOFError, OSError):
+        pass
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = d.decompress(raw) + d.flush()
+    if d.eof:
+        if diag is not None:
+            diag["gzip_trailing_bytes"] = d.unused_data[:32].hex()
+        return out
+    if strict:
+        raise EOFError(f"gzip member truncated: {path}")
+    if diag is not None:
+        diag["gzip_truncated"] = True
+    return out
+
 
 @dataclass
 class SudsBlock:
@@ -91,8 +126,11 @@ def iter_suds_blocks(
         diag["last_good_offset"] = 0
         diag["stop_reason"] = "clean_eof"
 
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rb") as f:
+    if str(path).endswith(".gz"):
+        f_ctx = io.BytesIO(_gunzip_bytes(path, strict, diag))
+    else:
+        f_ctx = open(path, "rb")
+    with f_ctx as f:
         offset = 0
         while True:
             tag_raw = f.read(12)
