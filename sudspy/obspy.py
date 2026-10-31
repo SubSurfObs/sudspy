@@ -161,6 +161,7 @@ def read_suds_stream(
     *,
     strict: bool = False,
     diag: Optional[dict] = None,
+    recover_truncated: bool = False,
     default_location: str = "",
     location_map: Optional[LocationMap] = None,
     expected_network_len: Optional[int] = 2,
@@ -181,10 +182,13 @@ def read_suds_stream(
         If provided, populated with parse-stop diagnostics (n_blocks,
         last_good_offset, stop_reason). Lets the caller distinguish
         "clean_eof" (fully read) from "bad_sync"/"short_data" (stopped early —
+        recover_truncated=True additionally keeps the complete sample prefix
+        of a waveform block cut short (diag['truncated_trace'] records it) —
         trailing junk or genuine truncation). See iter_suds_blocks.
     """
     return suds_blocks_to_stream(
-        iter_suds_blocks(path, strict=strict, diag=diag),
+        iter_suds_blocks(path, strict=strict, diag=diag,
+                         recover_truncated=recover_truncated),
         default_location=default_location,
         location_map=location_map,
         expected_network_len=expected_network_len,

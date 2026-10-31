@@ -105,6 +105,7 @@ def iter_suds_blocks(
     skip_data: bool = False,
     strict: bool = True,
     diag: dict = None,
+    recover_truncated: bool = False,
 ) -> Iterable[SudsBlock]:
     """
     Layer 1 (IMMUTABLE): Yield raw SUDS blocks: tag + struct_body + data.
@@ -175,6 +176,20 @@ def iter_suds_blocks(
                             raise EOFError("Unexpected EOF reading data")
                         if diag is not None:
                             diag["stop_reason"] = "short_data"
+                        # Opt-in (eqserver, Codex 1b27f4f): a waveform block
+                        # (DESCRIPTRACE) cut short still holds a complete
+                        # prefix of samples; hand the partial payload on —
+                        # the decoder keeps whole samples only — and record
+                        # the truncation loudly in diag. Never padded.
+                        if (recover_truncated and tag["struct_type"] == 7
+                                and len(data) > 0):
+                            if diag is not None:
+                                diag["truncated_trace"] = {
+                                    "declared_bytes": tag["data_length"],
+                                    "available_bytes": len(data)}
+                            yield SudsBlock(struct_type=tag["struct_type"],
+                                            tag=tag, struct_body=struct_body,
+                                            data=data, offset=offset)
                         break
             else:
                 data = b""

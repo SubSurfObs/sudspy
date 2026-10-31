@@ -173,3 +173,26 @@ def test_gzip_two_complete_members_then_filler(single_chan_file, tmp_path):
     out = _gunzip_bytes(str(p), strict=True, diag=diag)
     assert out == open(single_chan_file, "rb").read() * 2
     assert diag["gzip_trailing_bytes"] == "deadbeefcafecafe"
+
+
+def test_recover_truncated_waveform_prefix(single_chan_file, tmp_path):
+    """Opt-in recovery of a DESCRIPTRACE cut mid-data (Codex 1b27f4f): the
+    complete sample prefix is returned, never padded, and recorded in diag;
+    without the opt-in the block is dropped as before."""
+    from sudspy.obspy import read_suds_stream
+    raw = open(single_chan_file, "rb").read()
+    blocks = list(iter_suds_blocks(str(single_chan_file)))
+    wave = next(b for b in blocks if b.struct_type == 7 and b.data)
+    cut = wave.offset + 12 + wave.tag["struct_length"] + len(wave.data) // 2 + 1
+    p = tmp_path / "cut.sud"
+    p.write_bytes(raw[:cut])
+    full = read_suds_stream(str(single_chan_file))
+    plain = read_suds_stream(str(p))
+    diag = {}
+    rec = read_suds_stream(str(p), diag=diag, recover_truncated=True)
+    full_tr = [t for t in full if len(t.data)][0]
+    assert sum(len(t.data) for t in plain) < sum(len(t.data) for t in rec)
+    tr = rec[-1]
+    assert 0 < len(tr.data) < len(full_tr.data)
+    assert (tr.data == full_tr.data[: len(tr.data)]).all()
+    assert diag["truncated_trace"]["available_bytes"] < diag["truncated_trace"]["declared_bytes"]
