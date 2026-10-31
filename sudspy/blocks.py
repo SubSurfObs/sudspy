@@ -20,10 +20,10 @@ from .constants import SRC_PHASE_MAP, SUDS_STRUCT_TYPES
 # second member and the whole file was dropped).
 def _gunzip_bytes(path, strict=True, diag=None) -> bytes:
     """Decompress a .gz SUDS file. Fast path: whole-file (isal) decompress.
-    If that fails, decode the FIRST member with zlib, which verifies the
-    gzip CRC32 and length itself. A complete, verified member followed by
-    trailing bytes is lossless: keep it and record the bytes
-    (diag['gzip_trailing_bytes']). A member that genuinely ends early is
+    If that fails, decode EVERY member with zlib, which verifies each
+    member's CRC32 and length. Bytes after the last complete member that do
+    not start another member are filler: kept out, recorded in
+    diag['gzip_trailing_bytes']. Any member that genuinely ends early is
     an error under strict=True; under strict=False only the decoded prefix
     is kept (the block walker then stops at the last COMPLETE block, so no
     partial block is ever emitted) and diag['gzip_truncated'] is set.
@@ -35,17 +35,26 @@ def _gunzip_bytes(path, strict=True, diag=None) -> bytes:
         return gzip.decompress(raw)
     except (EOFError, OSError):
         pass
-    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-    out = d.decompress(raw) + d.flush()
-    if d.eof:
-        if diag is not None:
-            diag["gzip_trailing_bytes"] = d.unused_data[:32].hex()
+    # Decode member by member (Codex e41bebb: a truncated SECOND member must
+    # never pass as filler). Bytes that start a new gzip member (1f 8b) are
+    # decoded as one; anything else after a complete member is trailing
+    # filler. Every member's CRC32/ISIZE is verified by zlib.
+    out, rest = b"", raw
+    while True:
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        out += d.decompress(rest) + d.flush()
+        if not d.eof:
+            if strict:
+                raise EOFError(f"gzip member truncated: {path}")
+            if diag is not None:
+                diag["gzip_truncated"] = True
+            return out
+        rest = d.unused_data
+        if rest[:2] == b"\x1f\x8b":
+            continue
+        if rest and diag is not None:
+            diag["gzip_trailing_bytes"] = rest[:32].hex()
         return out
-    if strict:
-        raise EOFError(f"gzip member truncated: {path}")
-    if diag is not None:
-        diag["gzip_truncated"] = True
-    return out
 
 
 @dataclass

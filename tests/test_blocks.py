@@ -146,3 +146,30 @@ def test_gzip_corrupt_data_raises(single_chan_file, tmp_path):
     p.write_bytes(bytes(gz))
     with pytest.raises(Exception):
         list(iter_suds_blocks(str(p), strict=False))
+
+
+def test_gzip_truncated_second_member_is_not_filler(single_chan_file, tmp_path):
+    """Codex e41bebb: member 1 complete + member 2 cut short must NOT be
+    accepted as 'member 1 + filler' — strict raises, tolerant flags it."""
+    g = _gz_bytes(single_chan_file)
+    p = tmp_path / "two.sud.gz"
+    p.write_bytes(g + g[: len(g) // 2])
+    with pytest.raises(EOFError):
+        list(iter_suds_blocks(str(p), strict=True))
+    diag = {}
+    list(iter_suds_blocks(str(p), strict=False, diag=diag))
+    assert diag.get("gzip_truncated") is True
+    assert "gzip_trailing_bytes" not in diag
+
+
+def test_gzip_two_complete_members_then_filler(single_chan_file, tmp_path):
+    """Two complete members + filler: both decoded (content doubled), filler recorded."""
+    g = _gz_bytes(single_chan_file)
+    p = tmp_path / "two_ok.sud.gz"
+    p.write_bytes(g + g + bytes.fromhex("deadbeefcafecafe"))
+    import io as _io
+    from sudspy.blocks import _gunzip_bytes
+    diag = {}
+    out = _gunzip_bytes(str(p), strict=True, diag=diag)
+    assert out == open(single_chan_file, "rb").read() * 2
+    assert diag["gzip_trailing_bytes"] == "deadbeefcafecafe"
